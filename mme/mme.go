@@ -1,3 +1,6 @@
+// Partner 1: 2020-10-0148
+// Partner 2: 2020-10-0287
+
 package mme
 
 import (
@@ -103,7 +106,6 @@ func (m *mme) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERequestReply
 	}
 	m.state[args.UserID] = tempStruct
 	m.stateLock.Unlock()
-	// return errors.New("RecvUERequest() not implemented")
 	return nil
 }
 

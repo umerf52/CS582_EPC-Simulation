@@ -1,3 +1,6 @@
+// Partner 1: 2020-10-0148
+// Partner 2: 2020-10-0287
+
 package loadbalancer
 
 import (
@@ -63,7 +66,6 @@ func (lb *loadBalancer) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERe
 	var ra *rpcs.UERequestArgs = new(rpcs.UERequestArgs)
 	var rr *rpcs.UERequestReply = new(rpcs.UERequestReply)
 	tempHash := lb.hashObject.Hash(strconv.FormatUint(args.UserID, 10))
-	// fmt.Println("tempHash", tempHash, lb.hashes[0])
 	ra.UserID = tempHash
 	ra.UEOperation = args.UEOperation
 
@@ -74,54 +76,6 @@ func (lb *loadBalancer) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERe
 	} else {
 		lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
 	}
-
-	// for i := range lb.hashes {
-	// 	if i == 0 && tempHash < lb.hashes[i] {
-	// 		lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
-	// 		break
-	// 	}
-	// 	if i > 0 && i < len(lb.hashes)-1 && tempHash >= lb.hashes[i-1] && tempHash <= lb.hashes[i+1] {
-	// 		lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
-	// 		break
-	// 	}
-	// 	if i == len(lb.hashes)-1 && tempHash >= lb.hashes[i] {
-	// 		lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
-	// 		break
-	// 	} else {
-	// 		lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
-	// 		break
-	// 	}
-	// }
-
-	// if tempHash <= lb.hashes[0] || tempHash > lb.hashes[len(lb.hashes)-1] {
-	// 	lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
-	// } else {
-	// 	for i := range lb.hashes {
-	// 		if i == len(lb.hashes)-1 {
-	// 			lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
-	// 			break
-	// 		} else {
-	// 			if i > 0 && tempHash > lb.hashes[i-1] && tempHash <= lb.hashes[i+1] {
-	// 				lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
-	// 			}
-	// 		}
-	// 	}
-	// }
-
-	// if tempHash < lb.hashes[0] || tempHash > lb.hashes[len(lb.hashes)-1] {
-	// 	lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
-	// 	// fmt.Println("4wded 1")
-	// } else {
-	// 	for i := range lb.hashes {
-	// 		if i > 0 && i != len(lb.hashes)-1 {
-	// 			if tempHash > lb.hashes[i-1] && tempHash <= lb.hashes[i+1] {
-	// 				lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
-	// 				// fmt.Println("4wded 2")
-	// 				break
-	// 			}
-	// 		}
-	// 	}
-	// }
 	return nil
 }
 

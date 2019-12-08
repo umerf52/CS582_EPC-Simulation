@@ -17,6 +17,7 @@ type loadBalancer struct {
 	hashes                                                     []uint64
 	serverNames                                                []string
 	hashObject                                                 *ConsistentHashing
+	mmeRPCObjectMap                                            map[uint64]*rpc.Client
 }
 
 // New returns a new instance of LoadBalancer, but does not start it
@@ -30,6 +31,7 @@ func New(ringWeight int) LoadBalancer {
 	lb.hashes = make([]uint64, 0)
 	lb.serverNames = make([]string, 0)
 	lb.hashObject = new(ConsistentHashing)
+	lb.mmeRPCObjectMap = make(map[uint64]*rpc.Client)
 	return lb
 }
 
@@ -47,7 +49,6 @@ func (lb *loadBalancer) StartLB(port int) error {
 	http.DefaultServeMux = http.NewServeMux()
 	rpcServer.HandleHTTP(rpc.DefaultRPCPath, rpc.DefaultDebugPath)
 	go http.Serve(lb.listener, nil)
-	// defer lb.Close()
 
 	return nil
 }
@@ -59,7 +60,69 @@ func (lb *loadBalancer) Close() {
 
 func (lb *loadBalancer) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERequestReply) error {
 	// TODO: Implement this!
-	return errors.New("RecvUERequest() not implemented")
+	var ra *rpcs.UERequestArgs = new(rpcs.UERequestArgs)
+	var rr *rpcs.UERequestReply = new(rpcs.UERequestReply)
+	tempHash := lb.hashObject.Hash(strconv.FormatUint(args.UserID, 10))
+	// fmt.Println("tempHash", tempHash, lb.hashes[0])
+	ra.UserID = tempHash
+	ra.UEOperation = args.UEOperation
+
+	// Logic to find index taken from: https://stackoverflow.com/questions/26519344/sort-search-looking-for-a-number-that-is-not-in-the-slice
+	i := sort.Search(len(lb.hashes), func(i int) bool { return lb.hashes[i] >= tempHash })
+	if i >= len(lb.hashes) {
+		lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
+	} else {
+		lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
+	}
+
+	// for i := range lb.hashes {
+	// 	if i == 0 && tempHash < lb.hashes[i] {
+	// 		lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
+	// 		break
+	// 	}
+	// 	if i > 0 && i < len(lb.hashes)-1 && tempHash >= lb.hashes[i-1] && tempHash <= lb.hashes[i+1] {
+	// 		lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
+	// 		break
+	// 	}
+	// 	if i == len(lb.hashes)-1 && tempHash >= lb.hashes[i] {
+	// 		lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
+	// 		break
+	// 	} else {
+	// 		lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
+	// 		break
+	// 	}
+	// }
+
+	// if tempHash <= lb.hashes[0] || tempHash > lb.hashes[len(lb.hashes)-1] {
+	// 	lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
+	// } else {
+	// 	for i := range lb.hashes {
+	// 		if i == len(lb.hashes)-1 {
+	// 			lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
+	// 			break
+	// 		} else {
+	// 			if i > 0 && tempHash > lb.hashes[i-1] && tempHash <= lb.hashes[i+1] {
+	// 				lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
+	// 			}
+	// 		}
+	// 	}
+	// }
+
+	// if tempHash < lb.hashes[0] || tempHash > lb.hashes[len(lb.hashes)-1] {
+	// 	lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
+	// 	// fmt.Println("4wded 1")
+	// } else {
+	// 	for i := range lb.hashes {
+	// 		if i > 0 && i != len(lb.hashes)-1 {
+	// 			if tempHash > lb.hashes[i-1] && tempHash <= lb.hashes[i+1] {
+	// 				lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvUERequest", ra, rr)
+	// 				// fmt.Println("4wded 2")
+	// 				break
+	// 			}
+	// 		}
+	// 	}
+	// }
+	return nil
 }
 
 func (lb *loadBalancer) RecvLeave(args *rpcs.LeaveArgs, reply *rpcs.LeaveReply) error {
@@ -95,5 +158,11 @@ func (lb *loadBalancer) RecvJoin(args *rpcs.JoinArgs, reply *rpcs.JoinReply) err
 	sort.Strings(lb.serverNames)
 	lb.hashes = append(lb.hashes, lb.hashObject.Hash(args.MMEport))
 	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
+	temp, err := rpc.DialHTTP("tcp", "localhost"+args.MMEport)
+	if err != nil {
+		return err
+	}
+	lb.mmeRPCObjectMap[lb.hashObject.Hash(args.MMEport)] = temp
+
 	return nil
 }

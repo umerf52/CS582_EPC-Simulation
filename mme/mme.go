@@ -1,12 +1,12 @@
 package mme
 
 import (
-	"errors"
 	"log"
 	"net"
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 	"tinyepc/rpcs"
 )
 
@@ -15,6 +15,10 @@ type mme struct {
 	conn                     *rpc.Client
 	listener                 net.Listener
 	myHostPort, loadBalancer string
+	numServed                int
+	replicas                 []string
+	state                    map[uint64]rpcs.MMEState
+	stateLock, numServedLock *sync.Mutex
 }
 
 var LOGF *log.Logger
@@ -52,6 +56,10 @@ func (m *mme) StartMME(hostPort string, loadBalancer string) error {
 
 	m.myHostPort = hostPort
 	m.loadBalancer = loadBalancer
+	m.numServed = 0
+	m.replicas = make([]string, 0)
+	m.state = make(map[uint64]rpcs.MMEState)
+	m.stateLock, m.numServedLock = &sync.Mutex{}, &sync.Mutex{}
 	m.conn, err = rpc.DialHTTP("tcp", "localhost"+loadBalancer)
 	if err != nil {
 		return err
@@ -61,14 +69,11 @@ func (m *mme) StartMME(hostPort string, loadBalancer string) error {
 	if err != nil {
 		return err
 	}
-
 	rpcServer := rpc.NewServer()
 	rpcServer.Register(rpcs.WrapMME(m))
 	http.DefaultServeMux = http.NewServeMux()
 	rpcServer.HandleHTTP(rpc.DefaultRPCPath, rpc.DefaultDebugPath)
 	go http.Serve(m.listener, nil)
-
-	defer m.Close()
 
 	var ja *rpcs.JoinArgs = new(rpcs.JoinArgs)
 	var jr *rpcs.JoinReply = new(rpcs.JoinReply)
@@ -80,7 +85,26 @@ func (m *mme) StartMME(hostPort string, loadBalancer string) error {
 
 func (m *mme) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERequestReply) error {
 	// TODO: Implement this!
-	return errors.New("RecvUERequest() not implemented")
+	m.numServedLock.Lock()
+	m.numServed++
+	m.numServedLock.Unlock()
+	var tempStruct rpcs.MMEState
+	m.stateLock.Lock()
+	if _, ok := m.state[args.UserID]; !ok {
+		tempStruct.Balance = 100
+		m.state[args.UserID] = tempStruct
+	}
+	if args.UEOperation == rpcs.Call {
+		tempStruct.Balance = m.state[args.UserID].Balance - 5
+	} else if args.UEOperation == rpcs.SMS {
+		tempStruct.Balance = m.state[args.UserID].Balance - 1
+	} else if args.UEOperation == rpcs.Load {
+		tempStruct.Balance = m.state[args.UserID].Balance + 10
+	}
+	m.state[args.UserID] = tempStruct
+	m.stateLock.Unlock()
+	// return errors.New("RecvUERequest() not implemented")
+	return nil
 }
 
 // RecvMMEStats is called by the tests to fetch MME state information
@@ -100,7 +124,10 @@ func (m *mme) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERequestReply
 //								}
 func (m *mme) RecvMMEStats(args *rpcs.MMEStatsArgs, reply *rpcs.MMEStatsReply) error {
 	// TODO: Implement this!
-	return errors.New("RecvMMEStats() not implemented")
+	reply.NumServed = m.numServed
+	reply.Replicas = m.replicas
+	reply.State = m.state
+	return nil
 }
 
 // TODO: add additional methods/functions below!

@@ -111,12 +111,19 @@ func (lb *loadBalancer) RecvJoin(args *rpcs.JoinArgs, reply *rpcs.JoinReply) err
 	lb.serverNames = append(lb.serverNames, args.MMEport)
 	sort.Strings(lb.serverNames)
 	lb.hashes = append(lb.hashes, lb.hashObject.Hash(args.MMEport))
-	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
-	temp, err := rpc.DialHTTP("tcp", "localhost"+args.MMEport)
+	tempClient, err := rpc.DialHTTP("tcp", "localhost"+args.MMEport)
 	if err != nil {
 		return err
 	}
-	lb.mmeRPCObjectMap[lb.hashObject.Hash(args.MMEport)] = temp
+	lb.mmeRPCObjectMap[lb.hashObject.Hash(args.MMEport)] = tempClient
+
+	if lb.ringWeight > 1 {
+		for i := 1; i < lb.ringWeight; i++ {
+			lb.hashes = append(lb.hashes, lb.hashObject.VirtualNodeHash(args.MMEport, i))
+			lb.mmeRPCObjectMap[lb.hashObject.VirtualNodeHash(args.MMEport, i)] = tempClient
+		}
+	}
+	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
 
 	return nil
 }

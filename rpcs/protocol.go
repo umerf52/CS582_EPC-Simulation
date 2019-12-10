@@ -23,6 +23,21 @@ type JoinArgs struct {
 type JoinReply struct {
 }
 
+type SendStateArgs struct {
+}
+
+type SendStateReply struct {
+	State map[uint64]MMEState
+}
+
+type SetStateArgs struct {
+	UserID uint64
+	State  MMEState
+}
+
+type SetStateReply struct {
+}
+
 // ========= DO NOT MODIFY ANYTHING BEYOND THIS LINE! =========
 
 // Operation represents the different kinds of user operations (Call, SMS or Load)

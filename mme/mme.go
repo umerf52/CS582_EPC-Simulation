@@ -4,11 +4,9 @@
 package mme
 
 import (
-	"log"
 	"net"
 	"net/http"
 	"net/rpc"
-	"os"
 	"sync"
 	"tinyepc/rpcs"
 )
@@ -23,8 +21,6 @@ type mme struct {
 	state                    map[uint64]rpcs.MMEState
 	stateLock, numServedLock *sync.Mutex
 }
-
-var LOGF *log.Logger
 
 // New creates and returns (but does not start) a new MME.
 func New() MME {
@@ -41,20 +37,6 @@ func (m *mme) Close() {
 }
 
 func (m *mme) StartMME(hostPort string, loadBalancer string) error {
-	const (
-		name = "log.txt"
-		flag = os.O_RDWR | os.O_CREATE
-		perm = os.FileMode(0666)
-	)
-
-	file, err := os.OpenFile(name, flag, perm)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	LOGF = log.New(file, "", log.Lshortfile|log.Lmicroseconds)
-
 	// TODO: Implement this!
 
 	m.myHostPort = hostPort
@@ -63,6 +45,7 @@ func (m *mme) StartMME(hostPort string, loadBalancer string) error {
 	m.replicas = make([]string, 0)
 	m.state = make(map[uint64]rpcs.MMEState)
 	m.stateLock, m.numServedLock = &sync.Mutex{}, &sync.Mutex{}
+	var err error
 	m.conn, err = rpc.DialHTTP("tcp", "localhost"+loadBalancer)
 	if err != nil {
 		return err
@@ -133,3 +116,17 @@ func (m *mme) RecvMMEStats(args *rpcs.MMEStatsArgs, reply *rpcs.MMEStatsReply) e
 }
 
 // TODO: add additional methods/functions below!
+
+func (m *mme) RecvSendState(args *rpcs.SendStateArgs, reply *rpcs.SendStateReply) error {
+	reply.State = m.state
+	m.state = make(map[uint64]rpcs.MMEState)
+	return nil
+}
+
+func (m *mme) RecvSetState(args *rpcs.SetStateArgs, reply *rpcs.SetStateReply) error {
+	// var tempStruct rpcs.MMEState
+	// m.stateLock.Lock()
+	m.state[args.UserID] = args.State
+	// m.stateLock.Unlock()
+	return nil
+}

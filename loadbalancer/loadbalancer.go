@@ -109,7 +109,8 @@ func (lb *loadBalancer) RecvJoin(args *rpcs.JoinArgs, reply *rpcs.JoinReply) err
 	lb.physicalNodes++
 	lb.virtualNodes = lb.virtualNodes + (lb.ringWeight - 1)
 	lb.serverNames = append(lb.serverNames, args.MMEport)
-	sort.Strings(lb.serverNames)
+	// We probably don't need to do this
+	// sort.Strings(lb.serverNames)
 	lb.hashes = append(lb.hashes, lb.hashObject.Hash(args.MMEport))
 	tempClient, err := rpc.DialHTTP("tcp", "localhost"+args.MMEport)
 	if err != nil {
@@ -124,6 +125,24 @@ func (lb *loadBalancer) RecvJoin(args *rpcs.JoinArgs, reply *rpcs.JoinReply) err
 		}
 	}
 	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
+
+	for _, conn := range lb.mmeRPCObjectMap {
+		var sa *rpcs.SendStateArgs = new(rpcs.SendStateArgs)
+		var sr *rpcs.SendStateReply = new(rpcs.SendStateReply)
+		conn.Call("MME.RecvSendState", sa, sr)
+		for k, v := range sr.State {
+			var ssa *rpcs.SetStateArgs = new(rpcs.SetStateArgs)
+			var ssr *rpcs.SetStateReply = new(rpcs.SetStateReply)
+			ssa.UserID = k
+			ssa.State = v
+			i := sort.Search(len(lb.hashes), func(i int) bool { return lb.hashes[i] >= k })
+			if i >= len(lb.hashes) {
+				lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvSetState", ssa, ssr)
+			} else {
+				lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvSetState", ssa, ssr)
+			}
+		}
+	}
 
 	return nil
 }

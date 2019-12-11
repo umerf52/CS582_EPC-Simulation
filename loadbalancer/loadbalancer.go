@@ -4,7 +4,6 @@
 package loadbalancer
 
 import (
-	"errors"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -81,7 +80,35 @@ func (lb *loadBalancer) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERe
 
 func (lb *loadBalancer) RecvLeave(args *rpcs.LeaveArgs, reply *rpcs.LeaveReply) error {
 	// TODO: Implement this!
-	return errors.New("RecvLeave() not implemented")
+	// Get the state from leaving MME and remove it from lb.serverNames
+	// And its hash from lb.hashes
+	lb.physicalNodes--
+	lb.virtualNodes = lb.virtualNodes - (lb.ringWeight - 1)
+	var sa *rpcs.SendStateArgs = new(rpcs.SendStateArgs)
+	var sr *rpcs.SendStateReply = new(rpcs.SendStateReply)
+	tempHash := lb.hashObject.Hash(args.HostPort)
+	lb.mmeRPCObjectMap[tempHash].Call("MME.RecvSendState", sa, sr)
+	lb.hashes = removeUint64(lb.hashes, tempHash)
+	lb.serverNames = removeString(lb.serverNames, args.HostPort)
+	lb.mmeRPCObjectMap[tempHash].Close()
+	delete(lb.mmeRPCObjectMap, tempHash)
+
+	// If virtual nodes are associated with leaving args.HostPort
+	// Remove them as well
+	if lb.ringWeight > 1 {
+		for i := 1; i < lb.ringWeight; i++ {
+			virtualHash := lb.hashObject.VirtualNodeHash(args.HostPort, i)
+			lb.hashes = removeUint64(lb.hashes, virtualHash)
+			delete(lb.mmeRPCObjectMap, virtualHash)
+		}
+	}
+	// Sort the hash ring back to order
+	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
+
+	// Send the state of leaving MME to all other MMEs
+	lb.reallocateKeys(sr.State)
+
+	return nil
 }
 
 // RecvLBStats is called by the tests to fetch LB state information
@@ -118,6 +145,7 @@ func (lb *loadBalancer) RecvJoin(args *rpcs.JoinArgs, reply *rpcs.JoinReply) err
 	}
 	lb.mmeRPCObjectMap[lb.hashObject.Hash(args.MMEport)] = tempClient
 
+	// If virtual nodes exist, assign them the same *rpc.Client
 	if lb.ringWeight > 1 {
 		for i := 1; i < lb.ringWeight; i++ {
 			lb.hashes = append(lb.hashes, lb.hashObject.VirtualNodeHash(args.MMEport, i))
@@ -126,23 +154,50 @@ func (lb *loadBalancer) RecvJoin(args *rpcs.JoinArgs, reply *rpcs.JoinReply) err
 	}
 	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
 
+	// Get state from every other MME and assign them the new states
 	for _, conn := range lb.mmeRPCObjectMap {
 		var sa *rpcs.SendStateArgs = new(rpcs.SendStateArgs)
 		var sr *rpcs.SendStateReply = new(rpcs.SendStateReply)
 		conn.Call("MME.RecvSendState", sa, sr)
-		for k, v := range sr.State {
-			var ssa *rpcs.SetStateArgs = new(rpcs.SetStateArgs)
-			var ssr *rpcs.SetStateReply = new(rpcs.SetStateReply)
-			ssa.UserID = k
-			ssa.State = v
-			i := sort.Search(len(lb.hashes), func(i int) bool { return lb.hashes[i] >= k })
-			if i >= len(lb.hashes) {
-				lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvSetState", ssa, ssr)
-			} else {
-				lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvSetState", ssa, ssr)
-			}
-		}
+		lb.reallocateKeys(sr.State)
 	}
 
 	return nil
+}
+
+// Remove function since slices do not have builtin
+func removeUint64(l []uint64, item uint64) []uint64 {
+	for i, other := range l {
+		if other == item {
+			return append(l[:i], l[i+1:]...)
+		}
+	}
+	return l
+}
+
+// Remove function since slices do not have builtin
+func removeString(l []string, item string) []string {
+	for i, other := range l {
+		if other == item {
+			return append(l[:i], l[i+1:]...)
+		}
+	}
+	return l
+}
+
+func (lb *loadBalancer) reallocateKeys(state map[uint64]rpcs.MMEState) {
+	// No need to hash UserID again
+	// Just check which UserID maps to which MME
+	for k, v := range state {
+		var ssa *rpcs.SetStateArgs = new(rpcs.SetStateArgs)
+		var ssr *rpcs.SetStateReply = new(rpcs.SetStateReply)
+		ssa.UserID = k
+		ssa.State = v
+		i := sort.Search(len(lb.hashes), func(i int) bool { return lb.hashes[i] >= k })
+		if i >= len(lb.hashes) {
+			lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvSetState", ssa, ssr)
+		} else {
+			lb.mmeRPCObjectMap[lb.hashes[i]].Call("MME.RecvSetState", ssa, ssr)
+		}
+	}
 }

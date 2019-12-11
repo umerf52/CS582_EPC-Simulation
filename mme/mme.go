@@ -119,14 +119,12 @@ func (m *mme) RecvMMEStats(args *rpcs.MMEStatsArgs, reply *rpcs.MMEStatsReply) e
 
 func (m *mme) RecvSendState(args *rpcs.SendStateArgs, reply *rpcs.SendStateReply) error {
 	reply.State = m.state
+	// Invalidate the state because we will be receiving newer ones
 	m.state = make(map[uint64]rpcs.MMEState)
 	return nil
 }
 
 func (m *mme) RecvSetState(args *rpcs.SetStateArgs, reply *rpcs.SetStateReply) error {
-	// var tempStruct rpcs.MMEState
-	// m.stateLock.Lock()
 	m.state[args.UserID] = args.State
-	// m.stateLock.Unlock()
 	return nil
 }

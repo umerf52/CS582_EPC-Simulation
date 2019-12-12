@@ -18,12 +18,9 @@ type mme struct {
 	myHostPort, loadBalancer string
 	numServed                int
 	replicas                 []string
-	replicaLock              *sync.Mutex
 	state                    map[uint64]rpcs.MMEState
 	stateLock, numServedLock *sync.Mutex
 }
-
-//var LOGF *log.Logger
 
 // New creates and returns (but does not start) a new MME.
 func New() MME {
@@ -41,26 +38,12 @@ func (m *mme) Close() {
 
 func (m *mme) StartMME(hostPort string, loadBalancer string) error {
 	// TODO: Implement this!
-
-	// const (
-	// 	name = "mmelog.txt"
-	// 	flag = os.O_RDWR | os.O_CREATE
-	// 	perm = os.FileMode(0666)
-	// )
-
-	// file, err := os.OpenFile(name, flag, perm)
-	// if err != nil {
-
-	// }
-
-	// LOGF = log.New(file, "", log.Lshortfile|log.Lmicroseconds)
 	m.myHostPort = hostPort
 	m.loadBalancer = loadBalancer
 	m.numServed = 0
 	m.replicas = make([]string, 0)
 	m.state = make(map[uint64]rpcs.MMEState)
 	m.stateLock, m.numServedLock = &sync.Mutex{}, &sync.Mutex{}
-	m.replicaLock = &sync.Mutex{}
 	var err error
 	m.conn, err = rpc.DialHTTP("tcp", "localhost"+loadBalancer)
 	if err != nil {
@@ -81,20 +64,6 @@ func (m *mme) StartMME(hostPort string, loadBalancer string) error {
 	var jr *rpcs.JoinReply = new(rpcs.JoinReply)
 	ja.MMEport = m.myHostPort
 	m.conn.Call("LoadBalancer.RecvJoin", ja, jr)
-	// for _, replica := range jr.Replicas {
-	// 	m.replicas = append(m.replicas, replica)
-	// }
-	// m.replicas = jr.Replicas
-	// LOGF.Println(m.replicas)
-	return nil
-}
-
-func (m *mme) RecvReplicas(args *rpcs.SetReplicaArgs, reply *rpcs.SetReplicaReply) error {
-	m.replicaLock.Lock()
-	m.replicas = args.Replicas
-	m.replicaLock.Unlock()
-	// LOGF.Println(m.replicas, len(m.replicas))
-	//fmt.Println(m.replicas, m.myHostPort)
 	return nil
 }
 
@@ -105,6 +74,7 @@ func (m *mme) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERequestReply
 	m.numServedLock.Unlock()
 	var tempStruct rpcs.MMEState
 	m.stateLock.Lock()
+	// If we have never seen this UserID, make a new item for it
 	if _, ok := m.state[args.UserID]; !ok {
 		tempStruct.Balance = 100
 		m.state[args.UserID] = tempStruct
@@ -141,14 +111,13 @@ func (m *mme) RecvMMEStats(args *rpcs.MMEStatsArgs, reply *rpcs.MMEStatsReply) e
 	reply.NumServed = m.numServed
 	reply.Replicas = m.replicas
 	reply.State = m.state
-	//LOGF.Println(m.replicas, m.myHostPort)
-	//fmt.Println(m.replicas, m.myHostPort)
 
 	return nil
 }
 
 // TODO: add additional methods/functions below!
 
+// RPC call to return state to loadbalancer
 func (m *mme) RecvSendState(args *rpcs.SendStateArgs, reply *rpcs.SendStateReply) error {
 	reply.State = m.state
 	// Invalidate the state because we will be receiving newer ones
@@ -156,7 +125,14 @@ func (m *mme) RecvSendState(args *rpcs.SendStateArgs, reply *rpcs.SendStateReply
 	return nil
 }
 
+// RPC call to add to MME's state
 func (m *mme) RecvSetState(args *rpcs.SetStateArgs, reply *rpcs.SetStateReply) error {
 	m.state[args.UserID] = args.State
+	return nil
+}
+
+// RPC call to set replicas received from loadbalancer
+func (m *mme) RecvReplicas(args *rpcs.SetReplicaArgs, reply *rpcs.SetReplicaReply) error {
+	m.replicas = args.Replicas
 	return nil
 }

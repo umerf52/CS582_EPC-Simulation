@@ -20,29 +20,12 @@ type loadBalancer struct {
 	serverNames                                                []string
 	hashObject                                                 *ConsistentHashing
 	mmeRPCObjectMap                                            map[uint64]*rpc.Client
-	physicalNodeMap                                            map[uint64]*rpc.Client
-	mmeStateMap                                                map[uint64]map[uint64]rpcs.MMEState
 	phyToVNodeMap                                              map[*rpc.Client][]uint64
 	vNodeToServMap                                             map[uint64]string
 }
 
-// var LOGF *log.Logger
-
 // New returns a new instance of LoadBalancer, but does not start it
 func New(ringWeight int) LoadBalancer {
-	// const (
-	// 	name = "lblog.txt"
-	// 	flag = os.O_RDWR | os.O_CREATE
-	// 	perm = os.FileMode(0666)
-	// )
-
-	// file, err := os.OpenFile(name, flag, perm)
-	// if err != nil {
-	// 	//return nil
-	// }
-	// //defer file.Close()
-	// LOGF = log.New(file, "", log.Lshortfile|log.Lmicroseconds)
-	// LOGF.Println(ringWeight)
 	// TODO: Implement this!
 	var lb *loadBalancer
 	lb = new(loadBalancer)
@@ -52,13 +35,13 @@ func New(ringWeight int) LoadBalancer {
 	lb.hashes = make([]uint64, 0)
 	lb.serverNames = make([]string, 0)
 	lb.hashObject = new(ConsistentHashing)
-	lb.mmeStateMap = make(map[uint64]map[uint64]rpcs.MMEState)
 	lb.mmeRPCObjectMap = make(map[uint64]*rpc.Client)
 	lb.phyToVNodeMap = make(map[*rpc.Client][]uint64)
 	lb.vNodeToServMap = make(map[uint64]string)
 	return lb
 }
 
+// Initialize LB, start the listener
 func (lb *loadBalancer) StartLB(port int) error {
 	// TODO: Implement this!
 	lb.myPort = port
@@ -82,6 +65,10 @@ func (lb *loadBalancer) Close() {
 	lb.listener.Close()
 }
 
+// A new UE request is here, hash the user ID
+// Find the index of the sorted hash array where our hashed user ID would fit in
+// then send the RPC to the corresponding MME
+
 func (lb *loadBalancer) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERequestReply) error {
 	// TODO: Implement this!
 	var ra *rpcs.UERequestArgs = new(rpcs.UERequestArgs)
@@ -90,9 +77,12 @@ func (lb *loadBalancer) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERe
 	ra.UserID = tempHash
 	ra.UEOperation = args.UEOperation
 
-	// Logic to find
-	//index taken from: https://stackoverflow.com/questions/26519344/sort-search-looking-for-a-number-that-is-not-in-the-slice
+	// Logic to find index taken from:
+	// https://stackoverflow.com/questions/26519344/sort-search-looking-for-a-number-that-is-not-in-the-slice
 	i := sort.Search(len(lb.hashes), func(i int) bool { return lb.hashes[i] >= tempHash })
+	//i returns the index of where our user Hash would be inserted inside the array
+	// according to our condition. so if i>len, then obviously its going to go to the
+	// 0th node again.
 	if i >= len(lb.hashes) {
 		lb.mmeRPCObjectMap[lb.hashes[0]].Call("MME.RecvUERequest", ra, rr)
 	} else {
@@ -104,7 +94,7 @@ func (lb *loadBalancer) RecvUERequest(args *rpcs.UERequestArgs, reply *rpcs.UERe
 func (lb *loadBalancer) RecvLeave(args *rpcs.LeaveArgs, reply *rpcs.LeaveReply) error {
 	// TODO: Implement this!
 	// Get the state from leaving MME and remove it from lb.serverNames
-	// And its hash from lb.hashes
+	// and its hash from lb.hashes
 	lb.physicalNodes--
 	lb.virtualNodes = lb.virtualNodes - (lb.ringWeight - 1)
 	var sa *rpcs.SendStateArgs = new(rpcs.SendStateArgs)
@@ -126,27 +116,22 @@ func (lb *loadBalancer) RecvLeave(args *rpcs.LeaveArgs, reply *rpcs.LeaveReply) 
 			lb.hashes = removeUint64(lb.hashes, virtualHash)
 			delete(lb.mmeRPCObjectMap, virtualHash)
 			delete(lb.vNodeToServMap, virtualHash)
-
 		}
 	}
 	// Sort the hash ring back to order
 	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
-	//if lb.virtualNodes == 0 {
 
+	// Now once everything is deleted and the ring has been restored again, compute
+	// replicas for each node again and then send rpcs to each mme to update their replicas.
 	replicas := lb.getReplicas()
-	//LOGF.Println(len(replicas))
 
-	//LOGF.Println(replicas)
-	//reply.Replicas = replicas
 	for conn, repl := range replicas {
 		repl = removeDuplicates(repl)
 		var ra *rpcs.SetReplicaArgs = new(rpcs.SetReplicaArgs)
 		var rr *rpcs.SetReplicaReply = new(rpcs.SetReplicaReply)
 		ra.Replicas = repl
-		//fmt.Println(repl)
 		conn.Call("MME.RecvReplicas", ra, rr)
 	}
-	//}
 
 	// Send the state of leaving MME to all other MMEs
 	lb.reallocateKeys(sr.State)
@@ -177,78 +162,56 @@ func (lb *loadBalancer) RecvLBStats(args *rpcs.LBStatsArgs, reply *rpcs.LBStatsR
 
 func (lb *loadBalancer) RecvJoin(args *rpcs.JoinArgs, reply *rpcs.JoinReply) error {
 	lb.physicalNodes++
-	lb.virtualNodes = lb.virtualNodes + (lb.ringWeight - 1)
+	lb.virtualNodes = lb.virtualNodes + (lb.ringWeight - 1) //logic taken from Piazza
 	lb.serverNames = append(lb.serverNames, args.MMEport)
-	// We probably don't need to do this
 	lb.hashes = append(lb.hashes, lb.hashObject.Hash(args.MMEport))
 	tempClient, err := rpc.DialHTTP("tcp", "localhost"+args.MMEport)
 	if err != nil {
 		return err
 	}
-	// tempMmeMap := make(map[uint64]*rpc.Client)
-	// tempMmeMap = lb.mmeRPCObjectMap
-	// tempPhysicalMap := make(map[uint64]*rpc.Client)
-	// tempPhysicalMap = lb.physicalNodeMap
 
-	//lb.physicalNodeMap[lb.hashObject.Hash(args.MMEport)] = tempClient
 	lb.mmeRPCObjectMap[lb.hashObject.Hash(args.MMEport)] = tempClient
 	lb.vNodeToServMap[lb.hashObject.Hash(args.MMEport)] = args.MMEport
 
-	// for k,v:= range replicaMap{
-
-	// }
+	// One map is the mapping for the servers hash to its client object
+	// the other maps its hash to its server port
 
 	// If virtual nodes exist, assign them the same *rpc.Client
 	if lb.ringWeight > 1 {
 		for i := 1; i < lb.ringWeight; i++ {
-			lb.hashes = append(lb.hashes, lb.hashObject.VirtualNodeHash(args.MMEport, i))
-			lb.mmeRPCObjectMap[lb.hashObject.VirtualNodeHash(args.MMEport, i)] = tempClient
-			lb.vNodeToServMap[lb.hashObject.VirtualNodeHash(args.MMEport, i)] = args.MMEport
-			lb.phyToVNodeMap[tempClient] = append(lb.phyToVNodeMap[tempClient], lb.hashObject.VirtualNodeHash(args.MMEport, i))
+			virtualHash := lb.hashObject.VirtualNodeHash(args.MMEport, i)
+			lb.hashes = append(lb.hashes, virtualHash)
+			lb.mmeRPCObjectMap[virtualHash] = tempClient
+			lb.vNodeToServMap[virtualHash] = args.MMEport
+			lb.phyToVNodeMap[tempClient] = append(lb.phyToVNodeMap[tempClient], virtualHash)
 		}
 	}
-	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
-	lb.sortServerByHash()
-	//fmt.Println(lb.hashes)
-	//fmt.Println(lb.serverNames)
-	//if lb.virtualNodes == 0 {
 
+	// Now once everything is inserted, sort the hashes to restore ring order
+	sort.Slice(lb.hashes, func(i, j int) bool { return lb.hashes[i] < lb.hashes[j] })
+	// Now sort the server names according to their hashes.
+	lb.sortServerByHash()
+
+	// Compute replicas for each node
 	replicas := lb.getReplicas()
 
-	//LOGF.Println(len(replicas))
-
-	//LOGF.Println(replicas)
-	//reply.Replicas = replicas
+	// Propogate computed replicas to every node
 	for conn, repl := range replicas {
-		repl = removeDuplicates(repl)
+		repl = removeDuplicates(repl) //get rid of duplicate nodes assigned as replicas
+		// e.g [:8002, :8002] is a case of duplicates
 		var ra *rpcs.SetReplicaArgs = new(rpcs.SetReplicaArgs)
 		var rr *rpcs.SetReplicaReply = new(rpcs.SetReplicaReply)
 		ra.Replicas = repl
-		//fmt.Println(repl)
 		conn.Call("MME.RecvReplicas", ra, rr)
 	}
-	//}
 
 	// Get state from every other MME and assign them the new states
-	for k, conn := range lb.mmeRPCObjectMap {
+	for _, conn := range lb.mmeRPCObjectMap {
 		var sa *rpcs.SendStateArgs = new(rpcs.SendStateArgs)
 		var sr *rpcs.SendStateReply = new(rpcs.SendStateReply)
 		conn.Call("MME.RecvSendState", sa, sr)
-
-		lb.mmeStateMap[k] = sr.State
-
 		lb.reallocateKeys(sr.State)
 	}
-
-	// for _, state := range lb.mmeStateMap {
-	// 	lb.reallocateKeys(state)
-	// 	//delete(lb.mmeStateMap, k)
-	// }
-	// lb.mmeStateMap = make(map[uint64]map[uint64]rpcs.MMEState)
-	// for k := range lb.mmeStateMap {
-	// 	delete(lb.mmeStateMap, k)
-	// }
-
 	return nil
 }
 
@@ -272,6 +235,7 @@ func removeString(l []string, item string) []string {
 	return l
 }
 
+// This function sends state to all the MMEs in lb.hash
 func (lb *loadBalancer) reallocateKeys(state map[uint64]rpcs.MMEState) {
 	// No need to hash UserID again
 	// Just check which UserID maps to which MME
@@ -289,8 +253,11 @@ func (lb *loadBalancer) reallocateKeys(state map[uint64]rpcs.MMEState) {
 	}
 }
 
+// For each hash in the sorted hash array, see which server name
+// corresponds to that hash, and then keep inserting it in a temp array
+// to get the sorted array of servers based on their hash, then just reassign
+// the lb.serverNames array to this sorted array
 func (lb *loadBalancer) sortServerByHash() {
-
 	tempServerNames := make([]string, 0)
 	for _, hash := range lb.hashes {
 		for _, server := range lb.serverNames {
@@ -302,41 +269,37 @@ func (lb *loadBalancer) sortServerByHash() {
 		}
 	}
 	lb.serverNames = tempServerNames
-
 }
 
+// Find the server name of the node next to you in the ring
+// If the server name is different to yours, then that's your replica.
+// Else, iterate over the ring until you find a server port different to yours,
+// indicating a different physical node, this caters to virtual nodes as well.
+// Edge cases: there's only one node in the ring, then assign [] as replica
+// You're at the end of the ring, then it won't be i+1, you'll go back to index 0
+// assign [] as replica if you complete one full pass over the ring i.e
+// you started at index 1 and after iterating over it all you come back to index 1
+// without finding a replica for yourself
 func (lb *loadBalancer) getReplicas() map[*rpc.Client][]string {
-	//fmt.Println(lb.vNodeToServMap)
-	// fmt.Println("-------------- STARTING PRINT------------ ")
-	// for k, v := range lb.vNodeToServMap {
-	// 	fmt.Println(k, v)
-	// }
 	replicaMap := make(map[*rpc.Client][]string)
 	passComplete := false
 	for i, hash := range lb.hashes {
 		conn := lb.mmeRPCObjectMap[hash]
-
 		replicas := make([]string, 0)
-
+		// Check if I am not the last MME in the ring
 		if i != len(lb.hashes)-1 {
 			myServer := lb.vNodeToServMap[hash]
 			nextServer := lb.vNodeToServMap[lb.hashes[i+1]]
-			//conn2 := lb.mmeRPCObjectMap[lb.hashes[i+1]]
-
 			if myServer != nextServer {
-
 				if _, ok := replicaMap[conn]; ok {
 					replicaMap[conn] = append(replicaMap[conn], nextServer)
 				} else {
 					replicas = append(replicas, nextServer)
 					replicaMap[conn] = replicas
-
 				}
-
 			} else {
 				temp := i
 				j := i + 1
-
 				for myServer == nextServer {
 					nextServer = lb.vNodeToServMap[lb.hashes[j]]
 					if j == temp {
@@ -347,45 +310,35 @@ func (lb *loadBalancer) getReplicas() map[*rpc.Client][]string {
 					if j > len(lb.hashes)-1 {
 						j = 0
 					}
-
 				}
-
 				if passComplete {
 					replicaMap[conn] = replicas
 					passComplete = false
 				}
-
 				if _, ok := replicaMap[conn]; ok {
 					replicaMap[conn] = append(replicaMap[conn], nextServer)
 				} else {
 					replicas = append(replicas, nextServer)
 					replicaMap[conn] = replicas
-
 				}
-
 			}
-
+			// There is only one MME in hash ring
 		} else if len(lb.hashes) == 1 {
 			replicaMap[conn] = replicas
 		} else {
+			// I am the last MME in the hash ring
 			myServer := lb.vNodeToServMap[hash]
 			nextServer := lb.vNodeToServMap[lb.hashes[0]]
-			//conn2 := lb.mmeRPCObjectMap[lb.hashes[i+1]]
 
 			if myServer != nextServer {
-
 				if _, ok := replicaMap[conn]; ok {
 					replicaMap[conn] = append(replicaMap[conn], nextServer)
 				} else {
 					replicas = append(replicas, nextServer)
 					replicaMap[conn] = replicas
-
 				}
-
 			} else {
-
 				j := 0
-
 				for myServer == nextServer {
 					nextServer = lb.vNodeToServMap[lb.hashes[j]]
 					j++
@@ -394,74 +347,20 @@ func (lb *loadBalancer) getReplicas() map[*rpc.Client][]string {
 						replicaMap[conn] = replicas
 						return replicaMap
 					}
-
 				}
-
 				if _, ok := replicaMap[conn]; ok {
 					replicaMap[conn] = append(replicaMap[conn], nextServer)
 				} else {
 					replicas = append(replicas, nextServer)
 					replicaMap[conn] = replicas
-
 				}
-
 			}
-
 		}
 	}
-
-	//i := lb.getPos(hash)
-	// conn := lb.mmeRPCObjectMap[hash]
-	// for i, v := range lb.hashes {
-	// 	//fmt.Println(i)
-	// 	replicas := make([]string, 0)
-	// 	conn := lb.mmeRPCObjectMap[v]
-	// 	replicaMap[conn] = make([]string, 0)
-	// 	if i != len(lb.hashes)-1 {
-
-	// 		//server1 := lb.getServerName(lb.hashes[i+1])
-	// 		//fmt.Println(lb.serverNames[i+1])
-	// 		replicas = append(replicas, lb.serverNames[i+1])
-	// 		//fmt.Println(replicas)
-	// 		replicaMap[conn] = replicas
-	// 	} else if len(lb.hashes) == 1 {
-	// 		replicaMap[conn] = replicas
-	// 		//return replicas
-	// 	} else {
-	// 		//LOGF.Println(lb.serverNames[0])
-	// 		//fmt.Println(lb.serverNames[0])
-	// 		//server1 := lb.getServerName(lb.hashes[0])
-	// 		replicas = append(replicas, lb.serverNames[0])
-	// 		replicaMap[conn] = replicas
-	// 		//fmt.Println(replicas)
-	// 	}
-	// }
-
 	return replicaMap
-	//return replicas
-
 }
 
-func (lb *loadBalancer) getPos(hash uint64) int {
-
-	for i, hash1 := range lb.hashes {
-		if hash1 == hash {
-			return i
-		}
-	}
-	return -1
-}
-
-func (lb *loadBalancer) getServerName(hash uint64) string {
-	for _, server := range lb.serverNames {
-
-		if hash == lb.hashObject.Hash(server) {
-			return server
-		}
-	}
-	return "-1"
-}
-
+// Function to remove duplicate entries in a string array
 func removeDuplicates(replicas []string) []string {
 	tempReplicaMap := make(map[string]bool)
 	tempReplica := make([]string, 0)
@@ -472,14 +371,4 @@ func removeDuplicates(replicas []string) []string {
 		tempReplica = append(tempReplica, k)
 	}
 	return tempReplica
-}
-
-func elementCount(ele string, arr []string) int {
-	count := 0
-	for _, val := range arr {
-		if val == ele {
-			count++
-		}
-	}
-	return count
 }

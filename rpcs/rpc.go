@@ -10,6 +10,7 @@ type RemoteMME interface {
 	// TODO: add additional RPC signatures below!
 	RecvSendState(args *SendStateArgs, reply *SendStateReply) error
 	RecvSetState(args *SetStateArgs, reply *SetStateReply) error
+	RecvReplicas(args *SetReplicaArgs, reply *SetReplicaReply) error
 }
 
 // RemoteLoadBalancer - Students should not use this interface in their code. Use WrapLB() instead.

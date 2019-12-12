@@ -21,6 +21,14 @@ type JoinArgs struct {
 
 // JoinReply comment
 type JoinReply struct {
+	// Replicas []string
+}
+
+type SetReplicaArgs struct {
+	Replicas []string
+}
+
+type SetReplicaReply struct {
 }
 
 type SendStateArgs struct {
